@@ -1,0 +1,17 @@
+{
+  "name": "@chatroom/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "password:hash": "tsx src/password-hash.ts"
+  },
+  "dependencies": {
+    "@chatroom/shared": "workspace:*",
+    "@fastify/cookie": "^11.0.2",
