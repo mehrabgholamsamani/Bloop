@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomId {
+  public
+  private
+}
+
+model User {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(24)
+  bio       String    @default("") @db.VarChar(160)
+  avatarUrl String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  sessions  Session[]
+  messages  Message[]
+  reactions Reaction[]
+  pins      PinnedMessage[]
+}
+
+model Session {
+  id                  String              @id @default(uuid()) @db.Uuid
+  tokenHash           String              @unique
+  userId              String              @db.Uuid
+  expiresAt           DateTime
+  createdAt           DateTime            @default(now())
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  privateRoomAccesses PrivateRoomAccess[]
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+model Message {
+  id        String    @id @default(uuid()) @db.Uuid
+  roomId    RoomId
+  authorId  String    @db.Uuid
+  text      String?   @db.VarChar(500)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime?
+  deletedAt DateTime?
+  parentId   String?   @db.Uuid
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  parent    Message?  @relation("MessageReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies   Message[] @relation("MessageReplies")
+  reactions Reaction[]
+  pins      PinnedMessage[]
+
+  @@index([roomId, createdAt])
+  @@index([authorId])
+  @@index([parentId])
+}
+
+model Reaction {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @db.Uuid
