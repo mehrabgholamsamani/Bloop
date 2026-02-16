@@ -61,3 +61,67 @@ model Message {
 model Reaction {
   id        String   @id @default(uuid()) @db.Uuid
   messageId String   @db.Uuid
+  userId    String   @db.Uuid
+  emoji     String   @db.VarChar(16)
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+model PinnedMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  roomId    RoomId   @unique
+  messageId String   @unique @db.Uuid
+  pinnedBy  String   @db.Uuid
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [pinnedBy], references: [id], onDelete: Cascade)
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model ModerationAction {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  kind      String   @db.VarChar(16)
+  expiresAt DateTime?
+  reason    String?  @db.VarChar(300)
+  createdAt DateTime @default(now())
+  @@index([userId, kind, expiresAt])
+}
+
+model Report {
+  id        String   @id @default(uuid()) @db.Uuid
+  reporterId String  @db.Uuid
+  messageId String?  @db.Uuid
+  reason    String   @db.VarChar(300)
+  status    String   @default("open") @db.VarChar(16)
+  createdAt DateTime @default(now())
+  @@index([status, createdAt])
+}
+
+model AdminAuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  action    String   @db.VarChar(64)
+  targetId  String?
+  details   String?
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+model PrivateRoomAccess {
+  id        String   @id @default(uuid()) @db.Uuid
+  sessionId String   @db.Uuid
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, expiresAt])
+}
