@@ -144,7 +144,7 @@ export function buildApp() {
     )
       return reply
         .status(400)
-        .send({ code: 'VALIDATION_ERROR', message: 'A 3???300 character reason is required.' });
+        .send({ code: 'VALIDATION_ERROR', message: 'A 3–300 character reason is required.' });
     return moderation.report.create({
       data: {
         reporterId: request.auth.user.id,
@@ -166,3 +166,172 @@ export function buildApp() {
     const { id, kind } = request.params as { id: string; kind: string };
     if (kind !== 'ban' && kind !== 'mute')
       return reply
+        .status(400)
+        .send({ code: 'VALIDATION_ERROR', message: 'Invalid moderation action.' });
+    const body = request.body as { reason?: unknown; expiresAt?: unknown };
+    const expiresAt = typeof body.expiresAt === 'string' ? new Date(body.expiresAt) : null;
+    await moderation.moderationAction.create({
+      data: {
+        userId: id,
+        kind,
+        expiresAt,
+        reason: typeof body.reason === 'string' ? body.reason.slice(0, 300) : null,
+      },
+    });
+    await audit(`user.${kind}`, id);
+    return { ok: true };
+  });
+  app.delete('/api/admin/users/:id/:kind', async (request, reply) => {
+    if (await adminOnly(request, reply)) return;
+    const { id, kind } = request.params as { id: string; kind: string };
+    await moderation.moderationAction.deleteMany({ where: { userId: id, kind } });
+    await audit(`user.${kind}.clear`, id);
+    return { ok: true };
+  });
+  app.get('/api/rooms/:roomId/messages/search', async (request, reply) => {
+    const roomId = roomIdSchema.parse((request.params as { roomId: string }).roomId);
+    if (roomId === 'private')
+      return reply.status(400).send({
+        code: 'E2EE_SEARCH_UNAVAILABLE',
+        message: 'Private encrypted messages cannot be searched by the server.',
+      });
+    const q = (request.query as { q?: unknown }).q;
+    if (typeof q !== 'string' || q.trim().length < 2 || q.trim().length > 100)
+      return reply
+        .status(400)
+        .send({ code: 'VALIDATION_ERROR', message: 'Search query must be 2–100 characters.' });
+    const messages = await prisma.message.findMany({
+      where: { roomId, deletedAt: null, text: { contains: q.trim(), mode: 'insensitive' } },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: { reactions: { select: { emoji: true } } },
+    });
+    return {
+      messages: messages.map((m) => ({
+        id: m.id,
+        roomId: m.roomId,
+        authorId: m.authorId,
+        text: m.text,
+        createdAt: m.createdAt.toISOString(),
+        updatedAt: m.updatedAt?.toISOString() ?? null,
+        deletedAt: null,
+        parentId: m.parentId,
+        reactions: Object.entries(
+          m.reactions.reduce<Record<string, number>>(
+            (a, r) => ({ ...a, [r.emoji]: (a[r.emoji] ?? 0) + 1 }),
+            {},
+          ),
+        ).map(([emoji, count]) => ({ emoji, count })),
+      })),
+    };
+  });
+  app.patch('/api/me', async (request) => {
+    const update = profileUpdateSchema.parse(request.body);
+    const user = await prisma.user.update({ where: { id: request.auth.user.id }, data: update });
+    request.auth.user = { id: user.id, name: user.name, bio: user.bio, avatarUrl: user.avatarUrl };
+    broadcastProfileUpdate(request.auth.user);
+    return { user: request.auth.user };
+  });
+  const attempts = new Map<string, { count: number; resetAt: number }>();
+  app.post('/api/rooms/private/access', async (request, reply) => {
+    const body = request.body as { password?: unknown };
+    const password = typeof body?.password === 'string' ? body.password : '';
+    const now = Date.now();
+    const entry = attempts.get(request.ip);
+    if (entry && entry.resetAt > now && entry.count >= 5)
+      return reply.status(429).send({ code: 'RATE_LIMITED', message: 'Try again later.' });
+    const hash = process.env.PRIVATE_ROOM_PASSWORD_HASH;
+    const valid = Boolean(hash && password && (await argon2.verify(hash, password)));
+    if (!valid) {
+      attempts.set(request.ip, {
+        count: (entry?.resetAt ?? 0) > now ? (entry?.count ?? 0) + 1 : 1,
+        resetAt: now + 60_000,
+      });
+      return reply
+        .status(401)
+        .send({ code: 'ACCESS_DENIED', message: 'Unable to grant private-room access.' });
+    }
+    attempts.delete(request.ip);
+    const expiresAt = new Date(now + 12 * 60 * 60 * 1000);
+    await prisma.privateRoomAccess.deleteMany({ where: { sessionId: request.auth.id } });
+    await prisma.privateRoomAccess.create({ data: { sessionId: request.auth.id, expiresAt } });
+    return { granted: true, expiresAt: expiresAt.toISOString() };
+  });
+  app.get('/api/rooms/private/access', async (request) => {
+    const access = await prisma.privateRoomAccess.findFirst({
+      where: { sessionId: request.auth.id, expiresAt: { gt: new Date() } },
+      orderBy: { expiresAt: 'desc' },
+    });
+    return { granted: Boolean(access), expiresAt: access?.expiresAt.toISOString() ?? null };
+  });
+  app.delete('/api/rooms/private/access', async (request) => {
+    await prisma.privateRoomAccess.deleteMany({ where: { sessionId: request.auth.id } });
+    return { granted: false, expiresAt: null };
+  });
+  const storage = new LocalAvatarStorage();
+  app.post('/api/me/avatar', async (request, reply) => {
+    const upload = await request.file();
+    if (!upload)
+      return reply
+        .status(400)
+        .send({ code: 'VALIDATION_ERROR', message: 'An avatar file is required.' });
+    const content = await upload.toBuffer();
+    const kind = content.subarray(0, 12);
+    const extension =
+      kind.subarray(0, 3).toString('hex') === 'ffd8ff'
+        ? 'jpg'
+        : kind.subarray(0, 8).toString() === '\x89PNG\r\n\x1a\n'
+          ? 'png'
+          : kind.subarray(0, 4).toString() === 'RIFF' && kind.subarray(8, 12).toString() === 'WEBP'
+            ? 'webp'
+            : null;
+    if (!extension)
+      return reply
+        .status(400)
+        .send({ code: 'VALIDATION_ERROR', message: 'Use a JPEG, PNG, or WebP image.' });
+    const previous = request.auth.user.avatarUrl;
+    const avatarUrl = await storage.save(content, extension);
+    const user = await prisma.user.update({
+      where: { id: request.auth.user.id },
+      data: { avatarUrl },
+    });
+    await storage.remove(previous);
+    request.auth.user = { id: user.id, name: user.name, bio: user.bio, avatarUrl: user.avatarUrl };
+    broadcastProfileUpdate(request.auth.user);
+    return { user: request.auth.user };
+  });
+  app.delete('/api/me/avatar', async (request) => {
+    const previous = request.auth.user.avatarUrl;
+    const user = await prisma.user.update({
+      where: { id: request.auth.user.id },
+      data: { avatarUrl: null },
+    });
+    await storage.remove(previous);
+    request.auth.user = { id: user.id, name: user.name, bio: user.bio, avatarUrl: user.avatarUrl };
+    broadcastProfileUpdate(request.auth.user);
+    return { user: request.auth.user };
+  });
+  app.get('/api/avatars/:filename', async (request, reply) => {
+    const { filename } = request.params as { filename: string };
+    if (!/^[a-f0-9-]+\.(jpg|png|webp)$/.test(filename)) return reply.status(404).send();
+    try {
+      const data = await readFile(
+        join(process.env.AVATAR_UPLOAD_DIR ?? './uploads/avatars', filename),
+      );
+      return reply
+        .header(
+          'Content-Type',
+          filename.endsWith('.png')
+            ? 'image/png'
+            : filename.endsWith('.webp')
+              ? 'image/webp'
+              : 'image/jpeg',
+        )
+        .header('X-Content-Type-Options', 'nosniff')
+        .send(data);
+    } catch {
+      return reply.status(404).send();
+    }
+  });
+  return app;
+}
