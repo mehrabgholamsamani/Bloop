@@ -42,3 +42,48 @@ function cookieOptions() {
   };
 }
 function publicUser(user: { id: string; name: string; bio: string; avatarUrl: string | null }) {
+  return { id: user.id, name: user.name, bio: user.bio, avatarUrl: user.avatarUrl };
+}
+
+export async function resolveSession(request: FastifyRequest, reply: FastifyReply) {
+  const rawCookie = request.cookies[COOKIE_NAME];
+  const session = await sessionFromCookie(request.cookies[COOKIE_NAME]);
+  if (session) {
+    if (session.expiresAt.getTime() - Date.now() < RENEWAL_DAYS * 86_400_000) {
+      session.expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { expiresAt: session.expiresAt },
+      });
+      reply.setCookie(COOKIE_NAME, rawCookie!, cookieOptions());
+    }
+    request.auth = session;
+    return;
+  }
+  const token = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
+  const user = await prisma.user.create({
+    data: { name: `Guest-${randomBytes(2).toString('hex').toUpperCase()}` },
+  });
+  const record = await prisma.session.create({
+    data: { tokenHash: tokenHash(token), userId: user.id, expiresAt },
+  });
+  request.auth = { id: record.id, user: publicUser(user), expiresAt };
+  reply.setCookie(COOKIE_NAME, `${token}.${sign(token)}`, cookieOptions());
+}
+
+export async function sessionFromCookie(
+  cookie: string | undefined,
+): Promise<AuthenticatedSession | null> {
+  const [token, signature] = cookie?.split('.') ?? [];
+  if (token && signature && hasValidSignature(token, signature)) {
+    const record = await prisma.session.findUnique({
+      where: { tokenHash: tokenHash(token) },
+      include: { user: true },
+    });
+    if (record && record.expiresAt > new Date()) {
+      return { id: record.id, user: publicUser(record.user), expiresAt: record.expiresAt };
+    }
+  }
+  return null;
+}
