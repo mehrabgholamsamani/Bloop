@@ -42,3 +42,48 @@ export class RedisRoomState {
       capacity,
     );
     if (accepted !== 1) return false;
+    await this.publisher.set(profile, JSON.stringify(user), 'EX', PRESENCE_TTL_SECONDS);
+    return true;
+  }
+  async users(room: RoomId): Promise<PublicUser[]> {
+    const key = `chatroom:room:${room}:sessions`;
+    const now = Date.now();
+    await this.publisher.zremrangebyscore(key, '-inf', now);
+    const sessions = await this.publisher.zrange(key, 0, -1);
+    const values = sessions.length
+      ? await this.publisher.mget(sessions.map((id) => `chatroom:room:${room}:session:${id}`))
+      : [];
+    const missing = sessions.filter((_id, index) => !values[index]);
+    if (missing.length) await this.publisher.zrem(key, ...missing);
+    return values.flatMap((value) => {
+      try {
+        return value ? [JSON.parse(value) as PublicUser] : [];
+      } catch {
+        return [];
+      }
+    });
+  }
+  async refresh(room: RoomId, sessionId: string) {
+    await Promise.all([
+      this.publisher.zadd(
+        `chatroom:room:${room}:sessions`,
+        Date.now() + PRESENCE_TTL_SECONDS * 1000,
+        sessionId,
+      ),
+      this.publisher.expire(`chatroom:room:${room}:session:${sessionId}`, PRESENCE_TTL_SECONDS),
+    ]);
+  }
+  async leave(room: RoomId, sessionId: string) {
+    await this.publisher.zrem(`chatroom:room:${room}:sessions`, sessionId);
+    await this.publisher.del(`chatroom:room:${room}:session:${sessionId}`);
+  }
+  publish(room: RoomId, event: ServerEvent) {
+    return this.publisher.publish(
+      'chatroom:events',
+      JSON.stringify({ origin: this.instanceId, room, event } satisfies Envelope),
+    );
+  }
+  async close() {
+    await Promise.all([this.publisher.quit(), this.subscriber.quit()]);
+  }
+}
