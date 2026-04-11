@@ -19,3 +19,24 @@ const settingsStore = prisma as unknown as {
       create: { key: string; value: string };
       update: { value: string };
     }) => unknown;
+  };
+};
+export async function getSettings(): Promise<Settings> {
+  const rows = await settingsStore.appSetting.findMany();
+  return rows.reduce(
+    (settings, row) => ({ ...settings, [row.key]: JSON.parse(row.value) }),
+    defaults,
+  ) as Settings;
+}
+export async function saveSettings(settings: Settings) {
+  await Promise.all(
+    Object.entries(settings).map(([key, value]) =>
+      settingsStore.appSetting.upsert({
+        where: { key },
+        create: { key, value: JSON.stringify(value) },
+        update: { value: JSON.stringify(value) },
+      }),
+    ),
+  );
+  return settings;
+}
