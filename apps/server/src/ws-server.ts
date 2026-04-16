@@ -273,3 +273,279 @@ export async function attachWebSocket(server: Server) {
                 userId: peer.user.id,
                 kind: 'mute',
                 OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+              },
+            });
+            if (mute)
+              return send(ws, {
+                type: 'error',
+                code: 'FORBIDDEN',
+                message: 'You are currently muted.',
+              });
+            const now = Date.now();
+            const previous = (messageWindows.get(peer.user.id) ?? []).filter(
+              (time) => time > now - 10_000,
+            );
+            if (previous.length >= 8)
+              return send(ws, {
+                type: 'error',
+                code: 'RATE_LIMITED',
+                message: 'Sending messages too quickly.',
+              });
+            messageWindows.set(peer.user.id, [...previous, now]);
+            const payload = peer.room === 'private' ? event.ciphertext : event.text;
+            if (
+              !payload ||
+              (peer.room === 'private' && event.text !== undefined) ||
+              (peer.room === 'public' && event.ciphertext !== undefined)
+            )
+              return send(ws, {
+                type: 'error',
+                code: 'INVALID_EVENT',
+                message:
+                  peer.room === 'private'
+                    ? 'Private messages must be encrypted.'
+                    : 'Invalid message.',
+              });
+            if (event.parentId) {
+              const parent = await prisma.message.findFirst({
+                where: { id: event.parentId, roomId: peer.room, deletedAt: null },
+              });
+              if (!parent)
+                return send(ws, {
+                  type: 'error',
+                  code: 'MESSAGE_NOT_FOUND',
+                  message: 'Reply target not found.',
+                });
+            }
+            const created = await prisma.message.create({
+              data: {
+                roomId: peer.room,
+                authorId: peer.user.id,
+                text: payload,
+                parentId: event.parentId,
+              },
+              include: { reactions: { select: { emoji: true } } },
+            });
+            return broadcast(peer.room, {
+              type: 'message.created',
+              message: message(created),
+              requestId: event.requestId,
+            });
+          }
+          if (event.type === 'message.edit') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const moderation = prisma as unknown as any;
+            const mute = await moderation.moderationAction.findFirst({
+              where: {
+                userId: peer.user.id,
+                kind: 'mute',
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+              },
+            });
+            if (mute)
+              return send(ws, {
+                type: 'error',
+                code: 'FORBIDDEN',
+                message: 'You are currently muted.',
+              });
+            const found = await prisma.message.findFirst({
+              where: { id: event.messageId, roomId: peer.room },
+            });
+            if (!found)
+              return send(ws, {
+                type: 'error',
+                code: 'MESSAGE_NOT_FOUND',
+                message: 'Message not found.',
+              });
+            if (found.authorId !== peer.user.id)
+              return send(ws, { type: 'error', code: 'FORBIDDEN', message: 'Not allowed.' });
+            if (found.deletedAt)
+              return send(ws, {
+                type: 'error',
+                code: 'MESSAGE_DELETED',
+                message: 'Message was deleted.',
+              });
+            const payload = peer.room === 'private' ? event.ciphertext : event.text;
+            if (
+              !payload ||
+              (peer.room === 'private' && event.text !== undefined) ||
+              (peer.room === 'public' && event.ciphertext !== undefined)
+            )
+              return send(ws, {
+                type: 'error',
+                code: 'INVALID_EVENT',
+                message:
+                  peer.room === 'private'
+                    ? 'Private messages must be encrypted.'
+                    : 'Invalid message.',
+              });
+            const updated = await prisma.message.update({
+              where: { id: found.id },
+              data: { text: payload, updatedAt: new Date() },
+              include: { reactions: { select: { emoji: true } } },
+            });
+            return broadcast(peer.room, { type: 'message.updated', message: message(updated) });
+          }
+          if (event.type === 'message.delete') {
+            const found = await prisma.message.findFirst({
+              where: { id: event.messageId, roomId: peer.room },
+            });
+            if (!found)
+              return send(ws, {
+                type: 'error',
+                code: 'MESSAGE_NOT_FOUND',
+                message: 'Message not found.',
+              });
+            if (found.authorId !== peer.user.id)
+              return send(ws, { type: 'error', code: 'FORBIDDEN', message: 'Not allowed.' });
+            if (found.deletedAt)
+              return send(ws, {
+                type: 'error',
+                code: 'MESSAGE_DELETED',
+                message: 'Message was deleted.',
+              });
+            const [deleted, pin] = await prisma.$transaction([
+              prisma.message.update({
+                where: { id: found.id },
+                data: { text: null, deletedAt: new Date() },
+              }),
+              prisma.pinnedMessage.findUnique({ where: { roomId: peer.room } }),
+            ]);
+            if (pin?.messageId === found.id)
+              await prisma.pinnedMessage.delete({ where: { roomId: peer.room } });
+            broadcast(peer.room, {
+              type: 'message.deleted',
+              messageId: deleted.id,
+              deletedAt: deleted.deletedAt!.toISOString(),
+            });
+            if (pin?.messageId === found.id)
+              broadcast(peer.room, { type: 'message.pinned', roomId: peer.room, messageId: null });
+            return;
+          }
+          if (event.type === 'reaction.toggle') {
+            const target = await prisma.message.findFirst({
+              where: { id: event.messageId, roomId: peer.room, deletedAt: null },
+            });
+            if (!target)
+              return send(ws, {
+                type: 'error',
+                code: 'MESSAGE_NOT_FOUND',
+                message: 'Message not found.',
+              });
+            await prisma.$transaction(async (tx) => {
+              const existing = await tx.reaction.findUnique({
+                where: {
+                  messageId_userId_emoji: {
+                    messageId: target.id,
+                    userId: peer.user.id,
+                    emoji: event.emoji,
+                  },
+                },
+              });
+              if (existing) await tx.reaction.delete({ where: { id: existing.id } });
+              else
+                await tx.reaction.create({
+                  data: { messageId: target.id, userId: peer.user.id, emoji: event.emoji },
+                });
+            });
+            const reactions = await prisma.reaction.groupBy({
+              by: ['emoji'],
+              where: { messageId: target.id },
+              _count: { emoji: true },
+            });
+            return broadcast(peer.room, {
+              type: 'reaction.updated',
+              messageId: target.id,
+              reactions: reactions.map((reaction) => ({
+                emoji: reaction.emoji,
+                count: reaction._count.emoji,
+              })),
+            });
+          }
+          if (event.type === 'message.pin') {
+            const target = await prisma.message.findFirst({
+              where: {
+                id: event.messageId,
+                roomId: peer.room,
+                authorId: peer.user.id,
+                deletedAt: null,
+              },
+            });
+            if (!target)
+              return send(ws, {
+                type: 'error',
+                code: 'FORBIDDEN',
+                message: 'Only your active messages can be pinned.',
+              });
+            await prisma.pinnedMessage.upsert({
+              where: { roomId: peer.room },
+              create: { roomId: peer.room, messageId: target.id, pinnedBy: peer.user.id },
+              update: { messageId: target.id, pinnedBy: peer.user.id },
+            });
+            return broadcast(peer.room, {
+              type: 'message.pinned',
+              roomId: peer.room,
+              messageId: target.id,
+            });
+          }
+          if (event.type === 'message.unpin') {
+            const pin = await prisma.pinnedMessage.findUnique({ where: { roomId: peer.room } });
+            if (!pin || pin.pinnedBy !== peer.user.id)
+              return send(ws, {
+                type: 'error',
+                code: 'FORBIDDEN',
+                message: 'Only the user who pinned it can unpin it.',
+              });
+            await prisma.pinnedMessage.delete({ where: { roomId: peer.room } });
+            return broadcast(peer.room, {
+              type: 'message.pinned',
+              roomId: peer.room,
+              messageId: null,
+            });
+          }
+          if (event.type.startsWith('typing')) {
+            if (event.type === 'typing.stop') {
+              clearTimeout(peer.typing);
+              peer.typing = undefined;
+            } else {
+              clearTimeout(peer.typing);
+              peer.typing = setTimeout(() => {
+                peer.typing = undefined;
+                if (peer.room)
+                  broadcast(peer.room, {
+                    type: 'typing.updated',
+                    userIds: [...rooms[peer.room]].filter((p) => p.typing).map((p) => p.user.id),
+                  });
+              }, 3000);
+            }
+            return broadcast(
+              peer.room,
+              {
+                type: 'typing.updated',
+                userIds: [...rooms[peer.room]].filter((p) => p.typing).map((p) => p.user.id),
+              },
+              ws,
+            );
+          }
+        } catch {
+          send(ws, {
+            type: 'error',
+            code: 'INTERNAL_ERROR',
+            message: 'Unable to process that event.',
+          });
+        }
+      }
+      ws.on('close', () => {
+        clearInterval(heartbeat);
+        clearTimeout(peer.typing);
+        leave(peer);
+      });
+    },
+  );
+  return {
+    close: async () => {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await distributed?.close();
+    },
+  };
+}
