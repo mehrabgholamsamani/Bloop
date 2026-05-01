@@ -10,3 +10,16 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@chatroom/shared": "workspace:*",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.1.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "vite": "^6.0.7"
+  }
+}
