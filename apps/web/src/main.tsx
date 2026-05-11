@@ -141,8 +141,8 @@ function Room({ roomId }: { roomId: RoomId }) {
   if (!access)
     return (
       <main>
-        <h1>???? Secret clubhouse</h1>
-        <p>Enter the shared password to unlock this room???s encrypted messages.</p>
+        <h1>🔒 Secret clubhouse</h1>
+        <p>Enter the shared password to unlock this room’s encrypted messages.</p>
         <form onSubmit={unlock}>
           <label>
             Password
@@ -222,7 +222,7 @@ function Chat({
     roomId === 'private'
       ? messages.map((message) => ({
           ...message,
-          text: message.text ? (decryptedTexts[message.id] ?? 'Decrypting message???') : null,
+          text: message.text ? (decryptedTexts[message.id] ?? 'Decrypting message…') : null,
         }))
       : messages;
   const submit = async (e: React.FormEvent) => {
@@ -399,3 +399,404 @@ function Chat({
                     );
                   }
                 }}
+              >
+                <label className="sr-only" htmlFor="message-search">
+                  Search messages
+                </label>
+                <input
+                  id="message-search"
+                  placeholder="Search messages"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  minLength={2}
+                />
+                <button className="search-submit">Search</button>
+              </form>
+              {searchResults.length > 0 && <p>{searchResults.length} matching message(s)</p>}
+            </>
+          )}
+        </section>
+        <section
+          className={`toolbar-panel people-panel ${peopleOpen ? 'toolbar-panel--open' : ''}`}
+          aria-hidden={!peopleOpen}
+        >
+          <strong>Online now · {users.length}</strong>
+          <div className="people-list">
+            {users.map((u) => (
+              <span key={u.id}>{u.name}</span>
+            ))}
+          </div>
+        </section>
+      </nav>
+      <header>
+        <h1>{roomId === 'public' ? 'Public room' : 'Private room'}</h1>
+        <span aria-live="polite">
+          {state === 'reconnecting' ? 'Finding the chat signal…' : state}
+        </span>
+        {leave && <button onClick={() => void leave()}>Leave private room</button>}{' '}
+        {state === 'disconnected' && <button onClick={reconnect}>Try the chat signal again</button>}
+      </header>
+      <aside>
+        <h2>Online ({users.length})</h2>
+        {users.map((u) => (
+          <div key={u.id}>{u.name}</div>
+        ))}
+      </aside>
+      <section className="messages" aria-live="polite">
+        <form
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (query.trim().length >= 2)
+              setSearchResults(
+                (
+                  await api<{ messages: ChatMessage[] }>(
+                    `/api/rooms/${roomId}/messages/search?q=${encodeURIComponent(query)}`,
+                  )
+                ).messages,
+              );
+          }}
+        >
+          <label>
+            Search messages
+            <input value={query} onChange={(event) => setQuery(event.target.value)} minLength={2} />
+          </label>
+          <button>Search</button>
+          {searchResults.length > 0 && <p>{searchResults.length} matching message(s)</p>}
+        </form>
+        {pinnedId && (
+          <p>
+            <strong>Pinned:</strong>{' '}
+            {visibleMessages.find((message) => message.id === pinnedId)?.text ?? 'A pinned message'}
+          </p>
+        )}
+        {visibleMessages.map((m) => (
+          <article
+            key={m.id}
+            className={`message ${m.authorId === me?.id ? 'message--mine' : ''} ${activeMessageId === m.id ? 'message--active' : ''} ${reactionMessageId === m.id ? 'message--reactions' : ''}`}
+            onMouseEnter={() => setReactionMessageId(m.id)}
+            onMouseLeave={() => {
+              setReactionMessageId(null);
+            }}
+            onClick={() => {
+              if (ignoreNextClick.current) {
+                ignoreNextClick.current = false;
+                return;
+              }
+              setActiveMessageId((id) => (id === m.id ? null : m.id));
+            }}
+            onTouchStart={() => {
+              longPress.current = false;
+              touchTimer.current = window.setTimeout(() => {
+                longPress.current = true;
+                setActiveMessageId(m.id);
+              }, 550);
+            }}
+            onTouchEnd={() => {
+              clearTimeout(touchTimer.current);
+              ignoreNextClick.current = true;
+              if (!longPress.current) {
+                setReactionMessageId((id) => (id === m.id ? null : m.id));
+              }
+            }}
+            onTouchCancel={() => {
+              clearTimeout(touchTimer.current);
+              ignoreNextClick.current = true;
+            }}
+          >
+            <strong>{name(m.authorId)}</strong>{' '}
+            <time>{new Date(m.createdAt).toLocaleTimeString()}</time>
+            {m.deletedAt ? (
+              <em>This message wandered off.</em>
+            ) : (
+              <>
+                {m.parentId && (
+                  <small>
+                    Replying to{' '}
+                    {name(
+                      visibleMessages.find((parent) => parent.id === m.parentId)?.authorId ?? '',
+                    )}
+                  </small>
+                )}
+                <p>{m.text}</p>
+                {m.updatedAt && <small>edited</small>}
+                <span className="reactions" onClick={(event) => event.stopPropagation()}>
+                  {m.reactions.map((reaction) => (
+                    <button
+                      key={reaction.emoji}
+                      onClick={() =>
+                        send({ type: 'reaction.toggle', messageId: m.id, emoji: reaction.emoji })
+                      }
+                    >
+                      {reaction.emoji} {reaction.count}
+                    </button>
+                  ))}
+                  {['👍', '❤️', '😂', '🎉', '👀']
+                    .filter((emoji) => !m.reactions.some((reaction) => reaction.emoji === emoji))
+                    .map((emoji) => (
+                      <button
+                        key={emoji}
+                        aria-label={`React ${emoji}`}
+                        onClick={() => send({ type: 'reaction.toggle', messageId: m.id, emoji })}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                </span>
+                <span className="message-actions" onClick={(event) => event.stopPropagation()}>
+                  <button aria-label="Reply" title="Reply" onClick={() => setReplyTo(m)}>
+                    ↩
+                  </button>
+                  {m.authorId === me?.id && (
+                    <>
+                      <button
+                        aria-label="Edit message"
+                        title="Edit"
+                        onClick={() => {
+                          const text = prompt('Edit message', m.text ?? '');
+                          if (text) send({ type: 'message.edit', messageId: m.id, text });
+                        }}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        aria-label="Delete message"
+                        title="Delete"
+                        onClick={() =>
+                          confirm('Delete this message?') &&
+                          send({ type: 'message.delete', messageId: m.id })
+                        }
+                      >
+                        🗑
+                      </button>
+                    </>
+                  )}
+                </span>
+              </>
+            )}
+          </article>
+        ))}
+      </section>
+      <p>{typing.length ? `${typing.map(name).join(', ')} typing…` : ''}</p>
+      <form className="composer" onSubmit={submit}>
+        {replyTo && (
+          <p>
+            Replying to {name(replyTo.authorId)}{' '}
+            <button type="button" onClick={() => setReplyTo(null)}>
+              Cancel
+            </button>
+          </p>
+        )}
+        <label className="sr-only" htmlFor="message">
+          Message
+        </label>
+        <input
+          id="message"
+          maxLength={500}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            send({ type: e.target.value ? 'typing.start' : 'typing.stop' });
+          }}
+        />
+        <button
+          className="send-button"
+          aria-label="Send message"
+          title="Send message"
+          disabled={state !== 'connected'}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 3L10 14M21 3l-7 18-4-7-7-4 18-7z" />
+          </svg>
+        </button>
+      </form>
+    </main>
+  );
+}
+function Profile() {
+  const [me, setMe] = useState<PublicUser | null>(null);
+  const [error, setError] = useState('');
+  const nav = useNavigate();
+  useEffect(() => {
+    void api<{ user: PublicUser }>('/api/me').then((x) => setMe(x.user));
+  }, []);
+  if (!me) return <main>Loading profile…</main>;
+  return (
+    <main>
+      <h1>Profile</h1>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          try {
+            const user = (
+              await api<{ user: PublicUser }>('/api/me', {
+                method: 'PATCH',
+                body: JSON.stringify({ name: me.name, bio: me.bio }),
+              })
+            ).user;
+            setMe(user);
+            nav('/public');
+          } catch (e) {
+            setError(e instanceof Error ? e.message : 'Could not save');
+          }
+        }}
+      >
+        <label>
+          Name
+          <input
+            value={me.name}
+            minLength={2}
+            maxLength={24}
+            onChange={(e) => setMe({ ...me, name: e.target.value })}
+          />
+        </label>
+        <label>
+          Bio
+          <textarea
+            value={me.bio}
+            maxLength={160}
+            onChange={(e) => setMe({ ...me, bio: e.target.value })}
+          />
+        </label>
+        <label>
+          Avatar
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              const data = new FormData();
+              data.append('file', f);
+              const r = await fetch('/api/me/avatar', {
+                method: 'POST',
+                credentials: 'include',
+                body: data,
+              });
+              if (r.ok) setMe(((await r.json()) as { user: PublicUser }).user);
+            }}
+          />
+        </label>
+        {me.avatarUrl && (
+          <>
+            <img className="avatar" src={me.avatarUrl} alt="Current avatar" />
+            <button
+              type="button"
+              onClick={async () =>
+                setMe(
+                  (await api<{ user: PublicUser }>('/api/me/avatar', { method: 'DELETE' })).user,
+                )
+              }
+            >
+              Remove avatar
+            </button>
+          </>
+        )}
+        <button>Save profile</button>
+        {error && <p role="alert">{error}</p>}
+      </form>
+    </main>
+  );
+}
+function Admin() {
+  const [secret, setSecret] = useState('');
+  const [settings, setSettings] = useState<{
+    publicRoomEnabled: boolean;
+    privateRoomEnabled: boolean;
+    roomCapacity: number;
+    messageRetentionDays: number;
+  } | null>(null);
+  const login = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await api('/api/admin/login', { method: 'POST', body: JSON.stringify({ secret }) });
+    setSettings(await api('/api/admin/settings'));
+  };
+  if (!settings)
+    return (
+      <main>
+        <h1>Admin</h1>
+        <form onSubmit={login}>
+          <label>
+            Admin secret
+            <input
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              required
+            />
+          </label>
+          <button>Sign in</button>
+        </form>
+      </main>
+    );
+  return (
+    <main>
+      <h1>Admin settings</h1>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setSettings(
+            await api('/api/admin/settings', { method: 'PATCH', body: JSON.stringify(settings) }),
+          );
+        }}
+      >
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.publicRoomEnabled}
+            onChange={(e) => setSettings({ ...settings, publicRoomEnabled: e.target.checked })}
+          />{' '}
+          Public room enabled
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.privateRoomEnabled}
+            onChange={(e) => setSettings({ ...settings, privateRoomEnabled: e.target.checked })}
+          />{' '}
+          Private room enabled
+        </label>
+        <label>
+          Capacity
+          <input
+            type="number"
+            min="1"
+            max="30"
+            value={settings.roomCapacity}
+            onChange={(e) => setSettings({ ...settings, roomCapacity: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Retention days
+          <input
+            type="number"
+            min="1"
+            max="365"
+            value={settings.messageRetentionDays}
+            onChange={(e) =>
+              setSettings({ ...settings, messageRetentionDays: Number(e.target.value) })
+            }
+          />
+        </label>
+        <button>Save settings</button>
+      </form>
+    </main>
+  );
+}
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<Room roomId="public" />} />
+      <Route path="/public" element={<Room roomId="public" />} />
+      <Route path="/private" element={<Room roomId="private" />} />
+      <Route path="/profile" element={<Profile />} />
+      <Route path="/admin" element={<Admin />} />
+    </Routes>
+  );
+}
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </StrictMode>,
+);
