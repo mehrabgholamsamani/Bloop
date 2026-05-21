@@ -21,3 +21,27 @@ export async function derivePrivateRoomKey(password: string): Promise<CryptoKey>
     { name: 'PBKDF2', salt: privateRoomSalt, iterations: 310_000, hash: 'SHA-256' },
     material,
     { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+export async function encryptPrivateText(key: CryptoKey, text: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(text)),
+  );
+  return `v1.${toBase64Url(iv)}.${toBase64Url(ciphertext)}`;
+}
+
+export async function decryptPrivateText(key: CryptoKey, payload: string): Promise<string> {
+  const [version, iv, ciphertext, extra] = payload.split('.');
+  if (version !== 'v1' || !iv || !ciphertext || extra)
+    throw new Error('Invalid encrypted message.');
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromBase64Url(iv) },
+    key,
+    fromBase64Url(ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
+}
