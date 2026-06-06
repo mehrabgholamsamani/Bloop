@@ -1,0 +1,32 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  postgres:
+    restart: unless-stopped
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chatroom
+      POSTGRES_PASSWORD: chatroom
+      POSTGRES_DB: chatroom
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U chatroom -d chatroom']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  server:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://chatroom:chatroom@postgres:5432/chatroom?schema=public
