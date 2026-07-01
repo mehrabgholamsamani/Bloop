@@ -41,7 +41,7 @@ const encryptedMessageSchema = z
   .regex(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
   .max(4096);
 const clientRequestIdSchema = z.string().uuid();
-export const reactionEmojiSchema = z.enum(['????', '??????', '????', '????', '????']);
+export const reactionEmojiSchema = z.enum(['👍', '❤️', '😂', '🎉', '👀']);
 
 export const clientEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('room.join'), roomId: roomIdSchema }),
@@ -57,3 +57,63 @@ export const clientEventSchema = z.discriminatedUnion('type', [
     messageId: z.string().uuid(),
     text: messageTextSchema.optional(),
     ciphertext: encryptedMessageSchema.optional(),
+  }),
+  z.object({ type: z.literal('message.delete'), messageId: z.string().uuid() }),
+  z.object({
+    type: z.literal('reaction.toggle'),
+    messageId: z.string().uuid(),
+    emoji: reactionEmojiSchema,
+  }),
+  z.object({ type: z.literal('message.pin'), messageId: z.string().uuid() }),
+  z.object({ type: z.literal('message.unpin') }),
+  z.object({ type: z.literal('admin.user.kick'), userId: z.string().uuid() }),
+  z.object({
+    type: z.literal('admin.message.edit'),
+    messageId: z.string().uuid(),
+    text: messageTextSchema,
+  }),
+  z.object({ type: z.literal('admin.message.delete'), messageId: z.string().uuid() }),
+  z.object({ type: z.literal('typing.start') }),
+  z.object({ type: z.literal('typing.stop') }),
+]);
+export type ClientEvent = z.infer<typeof clientEventSchema>;
+
+export const serverEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('connection.ready'), user: publicUserSchema }),
+  z.object({
+    type: z.literal('room.joined'),
+    roomId: roomIdSchema,
+    users: z.array(publicUserSchema),
+    messages: z.array(chatMessageSchema),
+  }),
+  z.object({ type: z.literal('room.accessDenied'), roomId: roomIdSchema }),
+  z.object({ type: z.literal('room.full'), roomId: roomIdSchema }),
+  z.object({
+    type: z.literal('message.created'),
+    message: chatMessageSchema,
+    requestId: clientRequestIdSchema.optional(),
+  }),
+  z.object({ type: z.literal('message.updated'), message: chatMessageSchema }),
+  z.object({
+    type: z.literal('message.deleted'),
+    messageId: z.string().uuid(),
+    deletedAt: z.string().datetime(),
+  }),
+  z.object({
+    type: z.literal('reaction.updated'),
+    messageId: z.string().uuid(),
+    reactions: z.array(z.object({ emoji: z.string(), count: z.number().int().positive() })),
+  }),
+  z.object({
+    type: z.literal('message.pinned'),
+    roomId: roomIdSchema,
+    messageId: z.string().uuid().nullable(),
+  }),
+  z.object({ type: z.literal('profile.updated'), user: publicUserSchema }),
+  z.object({ type: z.literal('user.joined'), user: publicUserSchema }),
+  z.object({ type: z.literal('user.left'), userId: z.string().uuid() }),
+  z.object({ type: z.literal('users.updated'), users: z.array(publicUserSchema) }),
+  z.object({ type: z.literal('typing.updated'), userIds: z.array(z.string().uuid()) }),
+  z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
+]);
+export type ServerEvent = z.infer<typeof serverEventSchema>;
