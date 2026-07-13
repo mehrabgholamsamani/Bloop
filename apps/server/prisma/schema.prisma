@@ -42,7 +42,7 @@ model Message {
   id        String    @id @default(uuid()) @db.Uuid
   roomId    RoomId
   authorId  String    @db.Uuid
-  text      String?   @db.VarChar(500)
+  text      String?   @db.VarChar(4096)
   createdAt DateTime  @default(now())
   updatedAt DateTime?
   deletedAt DateTime?
