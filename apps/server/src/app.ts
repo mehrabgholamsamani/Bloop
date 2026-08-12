@@ -2,12 +2,14 @@ import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import { profileUpdateSchema, roomIdSchema } from '@chatroom/shared';
 import argon2 from 'argon2';
 import Fastify from 'fastify';
 import { readFile } from 'node:fs/promises';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ZodError } from 'zod';
 import { LocalAvatarStorage } from './avatar-storage.js';
 import { resolveSession } from './auth.js';
@@ -54,7 +56,8 @@ export function buildApp() {
     return { status: 'ready' };
   });
   app.addHook('preHandler', async (request, reply) => {
-    if (request.url.startsWith('/api/') && request.url !== '/api/health')
+    const path = request.url.split('?')[0];
+    if (path.startsWith('/api/') && path !== '/api/health' && path !== '/api/ready')
       await resolveSession(request, reply);
   });
   app.get('/api/me', async (request) => ({ user: request.auth.user }));
@@ -333,5 +336,17 @@ export function buildApp() {
       return reply.status(404).send();
     }
   });
+  if (process.env.NODE_ENV === 'production') {
+    const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+    void app.register(fastifyStatic, {
+      root: resolve(moduleDirectory, '../../web/dist'),
+    });
+    app.setNotFoundHandler((request, reply) => {
+      const path = request.url.split('?')[0];
+      if (path.startsWith('/api/') || path === '/ws')
+        return reply.status(404).send({ code: 'NOT_FOUND', message: 'Route not found.' });
+      return reply.sendFile('index.html');
+    });
+  }
   return app;
 }

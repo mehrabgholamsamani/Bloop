@@ -6,7 +6,7 @@ import { pruneExpiredMessages } from './retention.js';
 
 const app = buildApp();
 const sockets = await attachWebSocket(app.server);
-const port = Number(process.env.SERVER_PORT ?? 3000);
+const port = Number(process.env.PORT ?? process.env.SERVER_PORT ?? 3000);
 await app.listen({ port, host: '0.0.0.0' });
 await pruneExpiredMessages();
 const retentionTimer = setInterval(
