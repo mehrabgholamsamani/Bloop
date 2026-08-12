@@ -7,6 +7,13 @@ import {
 import { StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, Route, Routes, useNavigate } from 'react-router-dom';
+import {
+  type AccentColor,
+  type AppearanceSettings,
+  type BackgroundTemplate,
+  defaultAppearance,
+  parseAppearance,
+} from './appearance';
 import { decryptPrivateText, derivePrivateRoomKey, encryptPrivateText } from './private-crypto';
 import './style.css';
 
@@ -166,49 +173,8 @@ function useTheme() {
   return { theme, toggleTheme: () => setTheme((value) => (value === 'light' ? 'dark' : 'light')) };
 }
 
-type AccentColor = 'blue' | 'violet' | 'rose' | 'tangerine' | 'sage';
-type BackgroundTemplate = 'atmosphere' | 'aurora' | 'sunset' | 'cloud' | 'linen';
-type ConversationDensity = 'comfortable' | 'compact';
-type BubbleStyle = 'soft' | 'round' | 'flat';
-
-type AppearanceSettings = {
-  accent: AccentColor;
-  background: BackgroundTemplate;
-  density: ConversationDensity;
-  bubbles: BubbleStyle;
-};
-
-const defaultAppearance: AppearanceSettings = {
-  accent: 'blue',
-  background: 'atmosphere',
-  density: 'comfortable',
-  bubbles: 'soft',
-};
-
 function readAppearance(): AppearanceSettings {
-  try {
-    const value = JSON.parse(
-      localStorage.getItem('bloop-appearance') ?? '{}',
-    ) as Partial<AppearanceSettings>;
-    return {
-      accent: ['blue', 'violet', 'rose', 'tangerine', 'sage'].includes(value.accent ?? '')
-        ? (value.accent as AccentColor)
-        : defaultAppearance.accent,
-      background: ['atmosphere', 'aurora', 'sunset', 'cloud', 'linen'].includes(
-        value.background ?? '',
-      )
-        ? (value.background as BackgroundTemplate)
-        : defaultAppearance.background,
-      density: ['comfortable', 'compact'].includes(value.density ?? '')
-        ? (value.density as ConversationDensity)
-        : defaultAppearance.density,
-      bubbles: ['soft', 'round', 'flat'].includes(value.bubbles ?? '')
-        ? (value.bubbles as BubbleStyle)
-        : defaultAppearance.bubbles,
-    };
-  } catch {
-    return defaultAppearance;
-  }
+  return parseAppearance(localStorage.getItem('bloop-appearance'));
 }
 
 function useCustomization() {
